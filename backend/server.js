@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const AWS = require("aws-sdk");
 const multer = require("multer");
@@ -7,27 +9,54 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// AWS CONFIG
 AWS.config.update({
-  region: "ap-south-1"
+  region: process.env.AWS_REGION
 });
 
 const rekognition = new AWS.Rekognition();
+const s3 = new AWS.S3();
+
 const upload = multer({ storage: multer.memoryStorage() });
 
-const COLLECTION_ID = "face-collection";
+const COLLECTION_ID = process.env.COLLECTION_ID;
+const BUCKET_NAME = process.env.BUCKET_NAME;
 
-// Health check
+// ========================
+// Health Check
+// ========================
 app.get("/", (req, res) => {
   res.send("Face Recognition Backend Running 🚀");
 });
 
+// ========================
 // INDEX FACE
+// ========================
 app.post("/index-face", upload.single("image"), async (req, res) => {
   try {
+
+    if (!req.file) {
+      return res.status(400).json({ message: "Image is required" });
+    }
+
+    const fileName = Date.now() + "-" + req.file.originalname;
+
+    // 1️⃣ Upload to S3
+    await s3.upload({
+      Bucket: BUCKET_NAME,
+      Key: fileName,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype
+    }).promise();
+
+    // 2️⃣ Index face using S3 image
     const params = {
       CollectionId: COLLECTION_ID,
       Image: {
-        Bytes: req.file.buffer
+        S3Object: {
+          Bucket: BUCKET_NAME,
+          Name: fileName
+        }
       },
       ExternalImageId: req.body.name,
       DetectionAttributes: []
@@ -37,21 +66,43 @@ app.post("/index-face", upload.single("image"), async (req, res) => {
 
     res.json({
       message: "Face indexed successfully",
-      faceId: data.FaceRecords[0].Face.FaceId
+      faceId: data.FaceRecords[0]?.Face?.FaceId
     });
 
   } catch (err) {
     console.error(err);
-    res.status(500).json(err);
+    res.status(500).json({ error: "Indexing failed", details: err.message });
   }
 });
+
+// ========================
 // SEARCH FACE
+// ========================
 app.post("/search-face", upload.single("image"), async (req, res) => {
   try {
+
+    if (!req.file) {
+      return res.status(400).json({ message: "Image is required" });
+    }
+
+    const fileName = Date.now() + "-" + req.file.originalname;
+
+    // 1️⃣ Upload to S3
+    await s3.upload({
+      Bucket: BUCKET_NAME,
+      Key: fileName,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype
+    }).promise();
+
+    // 2️⃣ Search face using S3 image
     const params = {
       CollectionId: COLLECTION_ID,
       Image: {
-        Bytes: req.file.buffer
+        S3Object: {
+          Bucket: BUCKET_NAME,
+          Name: fileName
+        }
       },
       FaceMatchThreshold: 85,
       MaxFaces: 1
@@ -65,16 +116,16 @@ app.post("/search-face", upload.single("image"), async (req, res) => {
         similarity: data.FaceMatches[0].Similarity
       });
     } else {
-      res.json({
-        message: "No match found"
-      });
+      res.json({ message: "No match found" });
     }
 
   } catch (err) {
     console.error(err);
-    res.status(500).json(err);
+    res.status(500).json({ error: "Search failed", details: err.message });
   }
 });
+
+// ========================
 app.listen(3000, () => {
   console.log("Server running on port 3000");
 });
