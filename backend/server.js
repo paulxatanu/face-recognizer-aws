@@ -5,6 +5,8 @@ const AWS = require("aws-sdk");
 const multer = require("multer");
 const cors = require("cors");
 
+const saveLog = require("./services/dynamoService");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -41,7 +43,7 @@ app.post("/index-face", upload.single("image"), async (req, res) => {
 
     const fileName = Date.now() + "-" + req.file.originalname;
 
-    // 1️⃣ Upload to S3
+    // Upload to S3
     await s3.upload({
       Bucket: BUCKET_NAME,
       Key: fileName,
@@ -49,7 +51,7 @@ app.post("/index-face", upload.single("image"), async (req, res) => {
       ContentType: req.file.mimetype
     }).promise();
 
-    // 2️⃣ Index face using S3 image
+    // Index face
     const params = {
       CollectionId: COLLECTION_ID,
       Image: {
@@ -76,7 +78,7 @@ app.post("/index-face", upload.single("image"), async (req, res) => {
 });
 
 // ========================
-// SEARCH FACE
+// SEARCH FACE (WITH DYNAMODB LOGGING)
 // ========================
 app.post("/search-face", upload.single("image"), async (req, res) => {
   try {
@@ -87,7 +89,7 @@ app.post("/search-face", upload.single("image"), async (req, res) => {
 
     const fileName = Date.now() + "-" + req.file.originalname;
 
-    // 1️⃣ Upload to S3
+    // Upload to S3
     await s3.upload({
       Bucket: BUCKET_NAME,
       Key: fileName,
@@ -95,7 +97,7 @@ app.post("/search-face", upload.single("image"), async (req, res) => {
       ContentType: req.file.mimetype
     }).promise();
 
-    // 2️⃣ Search face using S3 image
+    // Search face
     const params = {
       CollectionId: COLLECTION_ID,
       Image: {
@@ -111,10 +113,26 @@ app.post("/search-face", upload.single("image"), async (req, res) => {
     const data = await rekognition.searchFacesByImage(params).promise();
 
     if (data.FaceMatches.length > 0) {
+
+      const match = data.FaceMatches[0];
+
+      const logData = {
+        LogId: Date.now().toString(),
+        Name: match.Face.ExternalImageId,
+        Similarity: match.Similarity,
+        FaceId: match.Face.FaceId,
+        ImageKey: fileName,
+        Timestamp: new Date().toISOString()
+      };
+
+      // Save to DynamoDB
+      await saveLog(logData);
+
       res.json({
-        match: data.FaceMatches[0].Face.ExternalImageId,
-        similarity: data.FaceMatches[0].Similarity
+        match: match.Face.ExternalImageId,
+        similarity: match.Similarity
       });
+
     } else {
       res.json({ message: "No match found" });
     }
